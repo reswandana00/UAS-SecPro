@@ -1,26 +1,45 @@
 <?php
 include 'auth.php';
 
+// FIXED: Menggunakan session daripada cookie yang dapat dimanipulasi
 class Profile {
     public $username;
     public $isAdmin = false;
+
+    function __construct($u, $isAdmin = false) {
+        $this->username = $u;
+        $this->isAdmin = $isAdmin;
+    }
 
     function __toString() {
         return "User: {$this->username}, Role: " . ($this->isAdmin ? "Admin" : "User");
     }
 }
 
-if (!isset($_COOKIE['profile'])) {
-    die("Profile cookie tidak ditemukan. Silakan login ulang.");
+// FIXED: Generate CSRF token
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-$profile = unserialize($_COOKIE['profile']); 
+// FIXED: Menggunakan data dari session yang aman
+if (!isset($_SESSION['profile'])) {
+    die("Profile data tidak ditemukan. Silakan login ulang.");
+}
+
+$profile = new Profile($_SESSION['profile']['username'], $_SESSION['profile']['isAdmin']);
 
 // jika admin, boleh hapus user lain
 if ($profile->isAdmin && isset($_POST['delete_user'])) {
-    $target = $_POST['delete_user'];
-    $GLOBALS['PDO']->exec("DELETE FROM users WHERE username='$target'");
-    $msg = "<p style='color:green'>User <b>$target</b> berhasil dihapus!</p>";
+    // FIXED: Validasi CSRF token
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        $msg = "<p style='color:red'>Invalid CSRF token.</p>";
+    } else {
+        $target = $_POST['delete_user'];
+        // FIXED: Menggunakan prepared statement untuk mencegah SQL injection
+        $stmt = $GLOBALS['PDO']->prepare("DELETE FROM users WHERE username = ?");
+        $stmt->execute([$target]);
+        $msg = "<p style='color:green'>User <b>" . htmlspecialchars($target) . "</b> berhasil dihapus!</p>";
+    }
 }
 
 include '_header.php';
@@ -30,9 +49,11 @@ include '_header.php';
 
 <?php if ($profile->isAdmin): ?>
   <h3>Admin Panel</h3>
+  <!-- FIXED: Menambahkan CSRF token untuk mencegah CSRF attack -->
   <form method="post">
+    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
     <label>Delete user:
-      <select name="delete_user">
+      <select name="delete_user" required>
         <?php
         $users = $GLOBALS['PDO']->query("SELECT username FROM users");
         foreach ($users as $u) {
